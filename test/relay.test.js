@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import WebSocket from "ws";
 import { createRelay } from "../index.js";
 import { createInMemorySqliteAdapter, createStorage } from "../storage.mjs";
@@ -49,7 +50,7 @@ async function setup(ticketTtlMs, { oidcClient } = {}) {
   const base = `http://127.0.0.1:${address.port}`;
   env.APP_URL = base;
   fixtures.push(async () => {
-    await new Promise((resolve) => relay.server.close(resolve));
+    await relay.close();
     database.close();
     await rm(dir, { recursive: true, force: true });
   });
@@ -64,6 +65,7 @@ after(async () => {
 function connect(url, headers) {
   return new WebSocket(url, { headers });
 }
+const socketPath = (id) => `/api/v1/sessions/${id}/connect`;
 function nextMessage(ws) {
   return new Promise((resolve, reject) => {
     ws.once("message", (data, binary) => resolve([data, binary]));
@@ -95,21 +97,26 @@ async function post(base, path, body, auth = admin) {
 
 test("user session routes require Auth bearer and never enumerate rooms", async () => {
   const { base, ws } = await setup();
-  assert.equal((await fetch(`${base}/api/sessions`)).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/sessions`)).status, 401);
   assert.equal(
     (
-      await fetch(`${base}/api/sessions`, {
+      await fetch(`${base}/api/v1/sessions`, {
         headers: { authorization: "Bearer invalid" },
       })
     ).status,
     401,
   );
   assert.equal((await fetch(`${base}/new`)).status, 404);
+  const apiDoc = await fetch(`${base}/api`);
+  assert.equal(apiDoc.status, 200);
+  const spec = await apiDoc.json();
+  assert.equal(spec.servers[0].url, base);
+  assert.ok(spec.paths["/api/v1/sessions"]);
   assert.equal((await fetch(`${base}/status`)).status, 404);
   assert.equal((await post(base, "/publish", { sessionId: "anything", data: "x" })).status, 404);
-  const generic = connect(`${ws}/${"a".repeat(128)}`);
+  const generic = connect(`${ws}${socketPath("a".repeat(128))}`);
   assert.equal(await closed(generic), 1006);
-  const malformed = connect(`${ws}/ordinary`);
+  const malformed = connect(`${ws}${socketPath("ordinary")}`);
   assert.equal(await closed(malformed), 1006);
 });
 
@@ -152,7 +159,7 @@ test("OIDC sign-in binds state to a browser cookie and exposes only a short-live
     },
   };
   const { base } = await setup(undefined, { oidcClient: fakeOidc });
-  const login = await fetch(`${base}/auth/login`, { redirect: "manual" });
+  const login = await fetch(`${base}/api/v1/auth/login`, { redirect: "manual" });
   assert.equal(login.status, 302);
   assert.equal(new URL(login.headers.get("location")).searchParams.get("state"), "test-state");
   const cookieHeader = login.headers.get("set-cookie");
@@ -172,19 +179,19 @@ test("OIDC sign-in binds state to a browser cookie and exposes only a short-live
     .getSetCookie()
     .find((value) => value.startsWith("relay_session="))
     .split(";")[0];
-  const browserStatus = await fetch(`${base}/auth/status`, { headers: { cookie: sessionCookie } });
+  const browserStatus = await fetch(`${base}/api/v1/auth/status`, { headers: { cookie: sessionCookie } });
   assert.equal(browserStatus.status, 200);
   assert.equal(browserStatus.headers.get("cache-control"), "no-store");
   assert.deepEqual(await browserStatus.json(), { authenticated: true });
-  const authConfig = await fetch(`${base}/auth/config`, { headers: { cookie: sessionCookie } });
+  const authConfig = await fetch(`${base}/api/v1/auth/config`, { headers: { cookie: sessionCookie } });
   assert.deepEqual(await authConfig.json(), { authApiUrl: "https://auth.test", audience: "test-audience" });
 
-  const sessions = await fetch(`${base}/api/sessions`, { headers: { authorization: "Bearer auth-user-a" } });
+  const sessions = await fetch(`${base}/api/v1/sessions`, { headers: { authorization: "Bearer auth-user-a" } });
   assert.equal(sessions.status, 200);
   assert.deepEqual(await sessions.json(), []);
   assert.equal(
     (
-      await fetch(`${base}/auth/logout`, {
+      await fetch(`${base}/api/v1/auth/logout`, {
         method: "POST",
         headers: { cookie: sessionCookie },
       })
@@ -193,7 +200,7 @@ test("OIDC sign-in binds state to a browser cookie and exposes only a short-live
   );
   assert.equal(
     (
-      await fetch(`${base}/auth/logout`, {
+      await fetch(`${base}/api/v1/auth/logout`, {
         method: "POST",
         headers: { cookie: sessionCookie, origin: base },
         redirect: "manual",
@@ -201,14 +208,14 @@ test("OIDC sign-in binds state to a browser cookie and exposes only a short-live
     ).status,
     303,
   );
-  assert.equal((await fetch(`${base}/auth/status`, { headers: { cookie: sessionCookie } })).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/auth/status`, { headers: { cookie: sessionCookie } })).status, 401);
 });
 
-test("SHA-512 sessions are owner-scoped, private by default, and public clients are listeners only", async () => {
+test("private sessions require independent hashed keys; public sessions allow bidirectional traffic", async () => {
   const { base, ws, database } = await setup();
   const auth = (value) => ({ authorization: `Bearer ${value}` });
   const create = (id, isPublic, tokenValue = "auth-user-a") =>
-    fetch(`${base}/api/sessions`, {
+    fetch(`${base}/api/v1/sessions`, {
       method: "POST",
       headers: { ...auth(tokenValue), "content-type": "application/json" },
       body: JSON.stringify({ id, isPublic }),
@@ -220,35 +227,83 @@ test("SHA-512 sessions are owner-scoped, private by default, and public clients 
   assert.equal((await create(sessionId, true)).status, 409);
   assert.equal((await create(sessionId, false, "auth-user-b")).status, 409);
 
-  const ownerList = await (await fetch(`${base}/api/sessions`, { headers: auth("auth-user-a") })).json();
-  const otherList = await (await fetch(`${base}/api/sessions`, { headers: auth("auth-user-b") })).json();
+  const ownerList = await (await fetch(`${base}/api/v1/sessions`, { headers: auth("auth-user-a") })).json();
+  const otherList = await (await fetch(`${base}/api/v1/sessions`, { headers: auth("auth-user-b") })).json();
   assert.equal(ownerList.length, 1);
   assert.equal(ownerList[0].id, sessionId);
   assert.deepEqual(otherList, []);
 
-  const unauthorized = connect(`${ws}/${sessionId}`);
-  assert.equal(await closed(unauthorized), 1006);
-  const wrongOwner = connect(`${ws}/${sessionId}`, auth("auth-user-b"));
-  assert.equal(await closed(wrongOwner), 1006);
+  const createdKeyResponse = await post(
+    base,
+    `/api/v1/sessions/${sessionId}/keys`,
+    { label: "integration" },
+    "auth-user-a",
+  );
+  assert.equal(createdKeyResponse.status, 201);
+  const { id: keyId, secret } = await createdKeyResponse.json();
+  assert.equal(
+    database.prepare("SELECT key_hash FROM session_keys WHERE id=?").get(keyId).key_hash,
+    createHash("sha256").update(secret).digest("hex"),
+  );
+  const keys = await (await fetch(`${base}/api/v1/sessions`, { headers: auth("auth-user-a") })).json();
+  assert.equal(keys[0].keys.length, 1);
+  assert.equal(keys[0].keys[0].id, keyId);
+  assert.equal("secret" in keys[0].keys[0], false);
+  const secondKeyResponse = await post(
+    base,
+    `/api/v1/sessions/${sessionId}/keys`,
+    { label: "rotation" },
+    "auth-user-a",
+  );
+  assert.equal(secondKeyResponse.status, 201);
+  const { id: secondKeyId, secret: secondSecret } = await secondKeyResponse.json();
 
-  const owner = connect(`${ws}/${sessionId}`, auth("auth-user-a"));
+  const unauthorized = connect(`${ws}${socketPath(sessionId)}`);
+  await opened(unauthorized);
+  const unauthorizedClosed = closed(unauthorized);
+  unauthorized.send(JSON.stringify({ type: "authorize", key: "wrong-key" }));
+  assert.equal(await unauthorizedClosed, 1008);
+
+  const owner = connect(`${ws}${socketPath(sessionId)}`);
   await opened(owner);
+  const authorized = nextMessage(owner);
+  owner.send(JSON.stringify({ type: "authorize", key: secret }));
+  assert.deepEqual(JSON.parse((await authorized)[0]), { type: "authorized" });
   assert.equal(owner.readyState, WebSocket.OPEN);
-  const stats = await (await fetch(`${base}/api/sessions`, { headers: auth("auth-user-a") })).json();
+  const stats = await (await fetch(`${base}/api/v1/sessions`, { headers: auth("auth-user-a") })).json();
   assert.equal(stats[0].connectedClients, 1);
-  owner.close();
+  const activeOwnerClosed = closed(owner);
+  const revoked = await fetch(`${base}/api/v1/sessions/${sessionId}/keys/${keyId}`, {
+    method: "DELETE",
+    headers: auth("auth-user-a"),
+  });
+  assert.equal(revoked.status, 204);
+  assert.equal(await activeOwnerClosed, 1008);
+  const replacement = connect(`${ws}${socketPath(sessionId)}`);
+  await opened(replacement);
+  const replacementAuthorized = nextMessage(replacement);
+  replacement.send(JSON.stringify({ type: "authorize", key: secondSecret }));
+  assert.deepEqual(JSON.parse((await replacementAuthorized)[0]), { type: "authorized" });
+  const revokeReplacement = await fetch(`${base}/api/v1/sessions/${sessionId}/keys/${secondKeyId}`, {
+    method: "DELETE",
+    headers: auth("auth-user-a"),
+  });
+  assert.equal(revokeReplacement.status, 204);
+  assert.equal(await closed(replacement), 1008);
+  const revokedSocket = connect(`${ws}${socketPath(sessionId)}`);
+  await opened(revokedSocket);
+  const revokedClosed = closed(revokedSocket);
+  revokedSocket.send(JSON.stringify({ type: "authorize", key: secret }));
+  assert.equal(await revokedClosed, 1008);
 
   const publicId = "b".repeat(128);
   assert.equal((await create(publicId, true)).status, 201);
-  const listener = connect(`${ws}/${publicId}`);
+  const listener = connect(`${ws}${socketPath(publicId)}`);
   await opened(listener);
-  const listenerClosed = closed(listener);
-  listener.send("must-not-publish");
-  assert.equal(await listenerClosed, 1008);
 
-  const otherListener = connect(`${ws}/${publicId}`, auth("auth-user-b"));
+  const otherListener = connect(`${ws}${socketPath(publicId)}`);
   await opened(otherListener);
-  const publisher = connect(`${ws}/${publicId}`, auth("auth-user-a"));
+  const publisher = connect(`${ws}${socketPath(publicId)}`);
   await opened(publisher);
   const received = nextMessage(otherListener);
   publisher.send("owner-publish");
@@ -256,7 +311,7 @@ test("SHA-512 sessions are owner-scoped, private by default, and public clients 
   publisher.close();
   otherListener.close();
 
-  const remove = await fetch(`${base}/api/sessions/${publicId}`, {
+  const remove = await fetch(`${base}/api/v1/sessions/${publicId}`, {
     method: "DELETE",
     headers: auth("auth-user-b"),
   });
@@ -266,9 +321,9 @@ test("SHA-512 sessions are owner-scoped, private by default, and public clients 
 
 test("registration requires bearer and UUID, machine claims are immutable and idempotent", async () => {
   const { base, ws, dir, database } = await setup();
-  const unauth = connect(`${ws}/bridge/register`);
+  const unauth = connect(`${ws}/api/v1/bridge/register`);
   assert.equal(await closed(unauth), 1006);
-  const bridge = connect(`${ws}/bridge/register`, {
+  const bridge = connect(`${ws}/api/v1/bridge/register`, {
     authorization: `Bearer ${token}`,
   });
   await opened(bridge);
@@ -276,7 +331,7 @@ test("registration requires bearer and UUID, machine claims are immutable and id
   bridge.send(JSON.stringify({ type: "register", machineId: "not-uuid" }));
   assert.ok(await invalidClosed);
 
-  const valid = connect(`${ws}/bridge/register`, {
+  const valid = connect(`${ws}/api/v1/bridge/register`, {
     authorization: `Bearer ${token}`,
   });
   await opened(valid);
@@ -291,7 +346,7 @@ test("registration requires bearer and UUID, machine claims are immutable and id
   });
   assert.equal(
     (
-      await post(base, `/_admin/machines/${machineId}/claim`, {
+      await post(base, `/api/v1/admin/machines/${machineId}/claim`, {
         ownerSub: "subject-a",
       })
     ).status,
@@ -299,7 +354,7 @@ test("registration requires bearer and UUID, machine claims are immutable and id
   );
   assert.equal(
     (
-      await post(base, `/_admin/machines/${machineId}/claim`, {
+      await post(base, `/api/v1/admin/machines/${machineId}/claim`, {
         ownerSub: "subject-a",
       })
     ).status,
@@ -307,7 +362,7 @@ test("registration requires bearer and UUID, machine claims are immutable and id
   );
   assert.equal(
     (
-      await post(base, `/_admin/machines/${machineId}/claim`, {
+      await post(base, `/api/v1/admin/machines/${machineId}/claim`, {
         ownerSub: "subject-b",
       })
     ).status,
@@ -316,7 +371,7 @@ test("registration requires bearer and UUID, machine claims are immutable and id
   assert.equal(
     (
       await (
-        await fetch(`${base}/_admin/machines`, {
+        await fetch(`${base}/api/v1/admin/machines`, {
           headers: { authorization: `Bearer ${admin}` },
         })
       ).json()
@@ -335,7 +390,7 @@ test("registration requires bearer and UUID, machine claims are immutable and id
   await restarted.loadMachines();
   await new Promise((resolve) => restarted.server.listen(0, "127.0.0.1", resolve));
   const restartedBase = `http://127.0.0.1:${restarted.server.address().port}`;
-  const persisted = await fetch(`${restartedBase}/_admin/machines`, {
+  const persisted = await fetch(`${restartedBase}/api/v1/admin/machines`, {
     headers: { authorization: `Bearer ${admin}` },
   });
   assert.equal((await persisted.json())[0].claimedBy, "subject-a");
@@ -402,19 +457,19 @@ test("imports existing machine/session JSON once and never resurrects deleted re
 
 test("machine socket does not forward before authorization; tickets one-use and frame routing reconnects", async () => {
   const { base, ws } = await setup();
-  const bridge = connect(`${ws}/bridge/register`, {
+  const bridge = connect(`${ws}/api/v1/bridge/register`, {
     authorization: `Bearer ${token}`,
   });
   await opened(bridge);
   const registered = nextMessage(bridge);
   bridge.send(JSON.stringify({ type: "register", machineId }));
   await registered;
-  await post(base, `/_admin/machines/${machineId}/claim`, {
+  await post(base, `/api/v1/admin/machines/${machineId}/claim`, {
     ownerSub: "subject-a",
   });
-  const ticketResponse = await post(base, `/_admin/machines/${machineId}/ticket`, { ownerSub: "subject-a" });
+  const ticketResponse = await post(base, `/api/v1/admin/machines/${machineId}/ticket`, { ownerSub: "subject-a" });
   const { ticket } = await ticketResponse.json();
-  const ui = connect(`${ws}/${machineId}`);
+  const ui = connect(`${ws}${socketPath(machineId)}`);
   await opened(ui);
   const leaked = new Promise((resolve) => {
     ui.once("message", (data) => resolve(data.toString()));
@@ -435,7 +490,7 @@ test("machine socket does not forward before authorization; tickets one-use and 
   const [downlink, downBinary] = await toUi;
   assert.equal(downBinary, true);
   assert.deepEqual([...downlink], [4, 5]);
-  const replay = connect(`${ws}/${machineId}`);
+  const replay = connect(`${ws}${socketPath(machineId)}`);
   await opened(replay);
   const replayClose = closed(replay);
   replay.send(JSON.stringify({ type: "authorize", ticket }));
@@ -443,7 +498,7 @@ test("machine socket does not forward before authorization; tickets one-use and 
   ui.close();
   bridge.close();
 
-  const replacement = connect(`${ws}/bridge/register`, {
+  const replacement = connect(`${ws}/api/v1/bridge/register`, {
     authorization: `Bearer ${token}`,
   });
   await opened(replacement);
@@ -455,14 +510,14 @@ test("machine socket does not forward before authorization; tickets one-use and 
 
 test("machine authorization times out without ticket", async () => {
   const { ws } = await setup();
-  const bridge = connect(`${ws}/bridge/register`, {
+  const bridge = connect(`${ws}/api/v1/bridge/register`, {
     authorization: `Bearer ${token}`,
   });
   await opened(bridge);
   const msg = nextMessage(bridge);
   bridge.send(JSON.stringify({ type: "register", machineId }));
   await msg;
-  const ui = connect(`${ws}/${machineId}`);
+  const ui = connect(`${ws}${socketPath(machineId)}`);
   await opened(ui);
   const close = closed(ui);
   // The machine is intentionally unclaimed and therefore cannot receive a ticket.
@@ -472,23 +527,23 @@ test("machine authorization times out without ticket", async () => {
 
 test("expired machine ticket is rejected", async () => {
   const { base, ws } = await setup(1);
-  const bridge = connect(`${ws}/bridge/register`, {
+  const bridge = connect(`${ws}/api/v1/bridge/register`, {
     authorization: `Bearer ${token}`,
   });
   await opened(bridge);
   const registration = nextMessage(bridge);
   bridge.send(JSON.stringify({ type: "register", machineId }));
   await registration;
-  await post(base, `/_admin/machines/${machineId}/claim`, {
+  await post(base, `/api/v1/admin/machines/${machineId}/claim`, {
     ownerSub: "subject-a",
   });
   const { ticket } = await (
-    await post(base, `/_admin/machines/${machineId}/ticket`, {
+    await post(base, `/api/v1/admin/machines/${machineId}/ticket`, {
       ownerSub: "subject-a",
     })
   ).json();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  const ui = connect(`${ws}/${machineId}`);
+  const ui = connect(`${ws}${socketPath(machineId)}`);
   await opened(ui);
   const close = closed(ui);
   ui.send(JSON.stringify({ type: "authorize", ticket }));

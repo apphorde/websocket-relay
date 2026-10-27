@@ -1,7 +1,7 @@
 import http from "node:http";
-import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import WebSocket, { WebSocketServer } from "ws";
 import * as oidc from "openid-client";
 import { createStorage } from "./storage.mjs";
@@ -40,6 +40,7 @@ export function createRelay({
   const controllers = new Map();
   const webSessions = new Map();
   const transactions = new Map();
+  let keyOperations = Promise.resolve();
   let oidcConfig;
   let storage;
   let initialized = false;
@@ -121,6 +122,19 @@ export function createRelay({
     }
     return s;
   };
+  const withKeyOperation = async (operation) => {
+    const previous = keyOperations;
+    let release;
+    keyOperations = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
 
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch(() => {
@@ -158,7 +172,7 @@ export function createRelay({
       res
         .writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
         .end(JSON.stringify(data));
-    if (pathname === "/health" && req.method === "GET") {
+    if (pathname === "/api/v1/health" && req.method === "GET") {
       let ready =
         initialized &&
         Boolean(
@@ -189,16 +203,19 @@ export function createRelay({
         return res.writeHead(500).end();
       }
     }
-    if (pathname === "/app.js" || pathname === "/style.css") {
+    if (pathname === "/app.js" || pathname === "/style.css" || pathname === "/vendor/li3-web.js") {
       try {
-        const ext = pathname === "/app.js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8";
-        const asset = await readFile(new URL(`./public${pathname}`, import.meta.url));
+        const isStyle = pathname === "/style.css";
+        const ext = isStyle ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
+        const assetPath =
+          pathname === "/vendor/li3-web.js" ? "./node_modules/@li3/web/index.js" : `./public${pathname}`;
+        const asset = await readFile(new URL(assetPath, import.meta.url));
         return res.writeHead(200, { "content-type": ext, "cache-control": "no-cache" }).end(asset);
       } catch {
         return res.writeHead(404).end();
       }
     }
-    if (pathname === "/auth/login" && req.method === "GET") {
+    if (pathname === "/api/v1/auth/login" && req.method === "GET") {
       try {
         const config = await oidcReady();
         const verifier = oidcClient.randomPKCECodeVerifier();
@@ -277,7 +294,7 @@ export function createRelay({
         return res.writeHead(400).end("Authentication failed");
       }
     }
-    if (pathname === "/auth/logout" && req.method === "POST") {
+    if (pathname === "/api/v1/auth/logout" && req.method === "POST") {
       if (env.APP_URL && req.headers.origin !== new URL(env.APP_URL).origin) {
         return res.writeHead(403).end();
       }
@@ -289,7 +306,7 @@ export function createRelay({
       setCookie(res, "", 0);
       return res.writeHead(303, { location: "/" }).end();
     }
-    if (pathname === "/auth/status" && req.method === "GET") {
+    if (pathname === "/api/v1/auth/status" && req.method === "GET") {
       const s = browserSession(req);
       if (!s) {
         return res.writeHead(401).end();
@@ -297,7 +314,7 @@ export function createRelay({
       res.setHeader("cache-control", "no-store");
       return json(200, { authenticated: true });
     }
-    if (pathname === "/auth/config" && req.method === "GET") {
+    if (pathname === "/api/v1/auth/config" && req.method === "GET") {
       if (!browserSession(req)) {
         return res.writeHead(401).end();
       }
@@ -327,7 +344,25 @@ export function createRelay({
         audience: env.AUTH_TOKEN_AUDIENCE,
       });
     }
-    if (pathname.startsWith("/api/")) {
+    if (pathname === "/api" && req.method === "GET") {
+      try {
+        const host = req.headers.host;
+        if (typeof host !== "string" || !/^[a-z0-9.-]+(?::\d{1,5})?$/i.test(host)) {
+          return res.writeHead(400).end();
+        }
+        const forwardedProto = env.TRUST_PROXY === "true" ? req.headers["x-forwarded-proto"] : undefined;
+        const protocol = forwardedProto === "https" || req.socket.encrypted ? "https:" : "http:";
+        const origin = new URL(`${protocol}//${host}`).origin;
+        const spec = await readFile(new URL("./openapi.json", import.meta.url), "utf8");
+        res.setHeader("cache-control", "no-store");
+        return res
+          .writeHead(200, { "content-type": "application/vnd.oai.openapi+json;version=3.1" })
+          .end(spec.replaceAll("__HOSTNAME__", origin));
+      } catch {
+        return res.writeHead(500).end();
+      }
+    }
+    if (pathname.startsWith("/api/v1/") && !pathname.startsWith("/api/v1/admin/")) {
       if (env.APP_URL && req.headers.origin && req.headers.origin !== new URL(env.APP_URL).origin) {
         return res.writeHead(403).end();
       }
@@ -336,19 +371,22 @@ export function createRelay({
       if (!info) {
         return res.writeHead(401).end();
       }
-      if (pathname === "/api/sessions" && req.method === "GET") {
+      if (pathname === "/api/v1/sessions" && req.method === "GET") {
         const sessions = await storage.listSessions(info.sub);
         return json(
           200,
-          sessions.map((s) => ({
-            id: s.id,
-            isPublic: s.isPublic,
-            createdAt: s.createdAt,
-            connectedClients: relays.get(s.id)?.clients.size || 0,
-          })),
+          await Promise.all(
+            sessions.map(async (s) => ({
+              id: s.id,
+              isPublic: s.isPublic,
+              createdAt: s.createdAt,
+              connectedClients: relays.get(s.id)?.clients.size || 0,
+              keys: s.isPublic ? [] : await storage.listKeys(s.id),
+            })),
+          ),
         );
       }
-      if (pathname === "/api/sessions" && req.method === "POST") {
+      if (pathname === "/api/v1/sessions" && req.method === "POST") {
         let body;
         try {
           body = await readJsonBody(req);
@@ -384,7 +422,49 @@ export function createRelay({
         }
         return json(201, { id: body.id });
       }
-      const del = /^\/api\/sessions\/([0-9a-f]{128})$/.exec(pathname);
+      const del = /^\/api\/v1\/sessions\/([0-9a-f]{128})$/.exec(pathname);
+      const keysPath = /^\/api\/v1\/sessions\/([0-9a-f]{128})\/keys(?:\/([a-f0-9-]+))?$/.exec(pathname);
+      if (keysPath) {
+        const session = await storage.getSession(keysPath[1]);
+        if (!session || session.ownerSub !== info.sub) {
+          return res.writeHead(404).end();
+        }
+        if (req.method === "GET" && !keysPath[2]) {
+          return json(200, await storage.listKeys(session.id));
+        }
+        if (req.method === "POST" && !keysPath[2]) {
+          let body;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            return res.writeHead(400).end();
+          }
+          if (session.isPublic) {
+            return res.writeHead(409).end();
+          }
+          const secret = randomBytes(32).toString("base64url");
+          const id = randomUUID();
+          await storage.createKey({
+            id,
+            sessionId: session.id,
+            label: String(body.label || "Key").slice(0, 100),
+            keyHash: createHash("sha256").update(secret).digest("hex"),
+            createdAt: new Date().toISOString(),
+          });
+          return json(201, { id, secret });
+        }
+        if (req.method === "DELETE" && keysPath[2]) {
+          await withKeyOperation(async () => {
+            await storage.deleteKey(keysPath[2], session.id);
+            relays.get(session.id)?.clients.forEach((client) => {
+              if (client.keyId === keysPath[2]) {
+                client.close(1008, "session key revoked");
+              }
+            });
+          });
+          return res.writeHead(204).end();
+        }
+      }
       if (del && req.method === "DELETE") {
         const record = await storage.getSession(del[1]);
         if (!record || record.ownerSub !== info.sub) {
@@ -398,14 +478,14 @@ export function createRelay({
       }
       return res.writeHead(404).end();
     }
-    if (pathname.startsWith("/_admin/")) {
+    if (pathname.startsWith("/api/v1/admin/")) {
       if (!bearerMatches(req.headers.authorization, env.RELAY_API_TOKEN)) {
         return res.writeHead(401).end();
       }
       if (!env.RELAY_API_TOKEN) {
         return res.writeHead(503).end();
       }
-      if (req.method === "GET" && pathname === "/_admin/machines") {
+      if (req.method === "GET" && pathname === "/api/v1/admin/machines") {
         const storedMachines = await storage.listMachines();
         return json(
           200,
@@ -419,7 +499,7 @@ export function createRelay({
           })),
         );
       }
-      const match = /^\/_admin\/machines\/([^/]+)\/(claim|ticket)$/.exec(pathname);
+      const match = /^\/api\/v1\/admin\/machines\/([^/]+)\/(claim|ticket)$/.exec(pathname);
       if (!match || !UUID.test(match[1]) || req.method !== "POST") {
         return res.writeHead(404).end();
       }
@@ -493,7 +573,7 @@ export function createRelay({
   server.on("upgrade", async (req, socket, head) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
-      if (url.pathname === "/bridge/register") {
+      if (url.pathname === "/api/v1/bridge/register") {
         if (
           !env.BRIDGE_REGISTRATION_TOKEN ||
           !bearerMatches(req.headers.authorization, env.BRIDGE_REGISTRATION_TOKEN)
@@ -591,7 +671,8 @@ export function createRelay({
         });
         return;
       }
-      const sessionId = url.pathname.slice(1);
+      const connectionMatch = /^\/api\/v1\/sessions\/([^/]+)\/connect$/.exec(url.pathname);
+      const sessionId = connectionMatch?.[1];
       if (!sessionId) {
         return socket.destroy();
       }
@@ -654,47 +735,67 @@ export function createRelay({
       if (origin && env.APP_URL && origin !== new URL(env.APP_URL).origin) {
         return socket.destroy();
       }
-      const urlToken = url.searchParams.get("token");
-      const headerToken = /^Bearer ([^\s]+)$/.exec(req.headers.authorization || "")?.[1];
-      const authToken = headerToken || urlToken;
-      userInfo(authToken)
-        .then((info) => {
-          if ((!info && authToken) || (!info && !record.isPublic)) {
-            return socket.destroy();
-          }
-          if (info && info.sub !== record.ownerSub && !record.isPublic) {
-            return socket.destroy();
-          }
-          let relay = relays.get(sessionId);
-          if (!relay) {
-            relay = new WebSocketServer({
-              noServer: true,
-              maxPayload: MAX_FRAME,
-              perMessageDeflate: false,
-            });
-            relay.sessionId = sessionId;
-            relays.set(sessionId, relay);
-          }
-          relay.handleUpgrade(req, socket, head, (ws) => {
-            ws.uid = randomUUID();
-            ws.owner = info?.sub === record.ownerSub;
-            ws.listenerOnly = !ws.owner;
-            ws.textOnly = url.searchParams.has("text");
-            ws.on("message", (message, isBinary) => {
-              if (ws.listenerOnly) {
-                return ws.close(1008, "listener only");
-              }
-              broadcast(sessionId, ws.uid, message, isBinary);
-            });
-            ws.once("close", () => {
-              if (relay.clients.size === 0 && relays.get(sessionId) === relay) {
-                relay.close();
-                relays.delete(sessionId);
-              }
-            });
+      {
+        let relay = relays.get(sessionId);
+        if (!relay) {
+          relay = new WebSocketServer({
+            noServer: true,
+            maxPayload: MAX_FRAME,
+            perMessageDeflate: false,
           });
-        })
-        .catch(() => socket.destroy());
+          relay.sessionId = sessionId;
+          relays.set(sessionId, relay);
+        }
+        relay.handleUpgrade(req, socket, head, (ws) => {
+          ws.uid = randomUUID();
+          ws.textOnly = url.searchParams.has("text");
+          const relayMessage = (message, isBinary) => broadcast(sessionId, ws.uid, message, isBinary);
+          if (record.isPublic) {
+            ws.on("message", relayMessage);
+          } else {
+            const timer = setTimeout(() => ws.close(1008, "authorization timeout"), AUTH_TIMEOUT);
+            ws.once("message", async (frame, binary) => {
+              let auth;
+              try {
+                auth = !binary && JSON.parse(frame.toString());
+              } catch {
+                auth = null;
+              }
+              const secret = typeof auth?.key === "string" ? auth.key : "";
+              try {
+                const authorizedKey = await withKeyOperation(async () => {
+                  const key = secret ? await storage.getKey(createHash("sha256").update(secret).digest("hex")) : null;
+                  if (
+                    auth?.type !== "authorize" ||
+                    !key ||
+                    key.session_id !== sessionId ||
+                    ws.readyState !== WebSocket.OPEN
+                  ) {
+                    return false;
+                  }
+                  ws.keyId = key.id;
+                  ws.send(JSON.stringify({ type: "authorized" }));
+                  ws.on("message", relayMessage);
+                  return true;
+                });
+                if (!authorizedKey) {
+                  return ws.close(1008, "unauthorized");
+                }
+                clearTimeout(timer);
+              } catch {
+                return ws.close(1011, "authorization unavailable");
+              }
+            });
+            ws.once("close", () => clearTimeout(timer));
+          }
+          ws.once("close", () => {
+            if (relay.clients.size === 0 && relays.get(sessionId) === relay) {
+              relay.close();
+              relays.delete(sessionId);
+            }
+          });
+        });
+      }
       return;
     } catch {
       socket.destroy();
@@ -729,9 +830,22 @@ export function createRelay({
       });
     }
   }
+  const close = async () => {
+    for (const relay of relays.values()) {
+      for (const client of relay.clients) {
+        client.terminate();
+      }
+      relay.close();
+    }
+    for (const ws of [...bridges.values(), ...controllers.values()]) {
+      ws.terminate();
+    }
+    await new Promise((resolve) => server.close(resolve));
+  };
   return {
     server,
     loadMachines,
+    close,
   };
 }
 

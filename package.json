@@ -10,6 +10,7 @@
   "author": "Darlan Alves <me@darlanalv.es>",
   "license": "MIT",
   "dependencies": {
+    "@li3/web": "^0.2.41",
     "openid-client": "^6.8.8",
     "ws": "^8.0.0"
   },

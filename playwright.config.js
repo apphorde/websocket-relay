@@ -10,7 +10,7 @@ export default defineConfig({
   },
   webServer: {
     command: "node test/e2e-server.mjs",
-    url: "http://127.0.0.1:4174/health",
+    url: "http://127.0.0.1:4174/api/v1/health",
     reuseExistingServer: !process.env.CI,
     timeout: 15_000,
   },

@@ -199,15 +199,59 @@ input:focus-visible {
 
 .session-details {
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.session-id-row,
+.key-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .session-id {
-  display: block;
-  overflow-wrap: anywhere;
+  width: min(100%, 190px);
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #e7e7e2;
+  border-radius: 5px;
   color: #30332d;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.session-row pre {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-key {
+  width: min(100%, 240px);
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.key-area {
+  display: grid;
+  max-width: 100%;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.key-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.key-list li {
+  flex-wrap: wrap;
 }
 
 .session-meta {

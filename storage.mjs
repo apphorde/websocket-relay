@@ -82,6 +82,9 @@ export async function createStorage({ env = process.env, db: injectedDb } = {}) 
     "CREATE TABLE IF NOT EXISTS user_sessions (id TEXT PRIMARY KEY, owner_sub TEXT NOT NULL, is_public INTEGER NOT NULL CHECK(is_public IN (0,1)), created_at TEXT NOT NULL)",
   );
   await run("CREATE INDEX IF NOT EXISTS user_sessions_owner_sub_idx ON user_sessions(owner_sub)");
+  await run(
+    "CREATE TABLE IF NOT EXISTS session_keys (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES user_sessions(id) ON DELETE CASCADE, label TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)",
+  );
   await run("CREATE TABLE IF NOT EXISTS relay_migrations (name TEXT PRIMARY KEY, completed_at TEXT NOT NULL)");
 
   const [storedMachines, storedSessions] = await Promise.all([
@@ -281,12 +284,33 @@ export async function createStorage({ env = process.env, db: injectedDb } = {}) 
     },
     async deleteSession(id, ownerSub) {
       await transaction([
+        { s: "DELETE FROM session_keys WHERE session_id=?", d: [id] },
         { s: "DELETE FROM user_sessions WHERE id=? AND owner_sub=?", d: [id, ownerSub] },
         {
           s: "DELETE FROM relay_ids WHERE id=? AND kind='session' AND NOT EXISTS (SELECT 1 FROM user_sessions WHERE id=?)",
           d: [id, id],
         },
       ]);
+    },
+    async listKeys(sessionId) {
+      return (
+        await all("SELECT id,label,created_at FROM session_keys WHERE session_id=? ORDER BY created_at", [sessionId])
+      ).map(({ id, label, created_at }) => ({ id, label, createdAt: created_at }));
+    },
+    async createKey({ id, sessionId, label, keyHash, createdAt }) {
+      await run("INSERT INTO session_keys(id,session_id,label,key_hash,created_at) VALUES(?,?,?,?,?)", [
+        id,
+        sessionId,
+        label,
+        keyHash,
+        createdAt,
+      ]);
+    },
+    async getKey(keyHash) {
+      return get("SELECT id,session_id FROM session_keys WHERE key_hash=?", [keyHash]);
+    },
+    async deleteKey(id, sessionId) {
+      await run("DELETE FROM session_keys WHERE id=? AND session_id=?", [id, sessionId]);
     },
   };
 }
