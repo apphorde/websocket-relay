@@ -6,7 +6,7 @@ The UI uses Li3 reactive state primitives from [`@li3/web`](https://li3.dev), se
 
 ## Configuration
 
-Set `DATABASE_URL` to the configured provider's HTTPS consumer module URL. `DB_AUTH_TOKEN` is optional and is used only when the provider requires bearer authentication. `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `AUTH_API_URL`, `AUTH_TOKEN_AUDIENCE`, and `APP_URL` configure browser sign-in and API tokens. Register `${APP_URL}/auth/callback` as the OIDC redirect URI. This callback is an OIDC protocol endpoint; application APIs use `/api/v1/*`. For TLS-terminating reverse proxies, set `TRUST_PROXY=true` so `/api` uses the forwarded HTTPS scheme. No provider URLs are built into the application.
+Set `DATABASE_URL` to the configured provider's HTTPS consumer module URL. `DB_AUTH_TOKEN` is optional and is used only when the provider requires bearer authentication. `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `AUTH_API_URL`, `AUTH_TOKEN_AUDIENCE`, and `APP_URL` configure browser sign-in and API tokens. Register `${APP_URL}/auth/callback` as the OIDC redirect URI. This callback is an OIDC protocol endpoint; application APIs use `/api/v1/*`. For TLS-terminating reverse proxies that serve multiple schemes, set `TRUST_PROXY=true` to use a validated `X-Forwarded-Proto` value. Otherwise the scheme of `APP_URL` is used as the external scheme. No provider URLs are built into the application.
 
 Persistent machine claims, sessions, and hashes of session keys are stored in the database. Existing `DATA_PATH/machines.json` and `sessions.json` are imported once; originals remain untouched.
 

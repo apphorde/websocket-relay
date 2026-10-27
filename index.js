@@ -351,7 +351,12 @@ export function createRelay({
           return res.writeHead(400).end();
         }
         const forwardedProto = env.TRUST_PROXY === "true" ? req.headers["x-forwarded-proto"] : undefined;
-        const protocol = forwardedProto === "https" || req.socket.encrypted ? "https:" : "http:";
+        const configuredProtocol = env.APP_URL ? new URL(env.APP_URL).protocol : "http:";
+        const protocol =
+          forwardedProto === "https" ||
+          (forwardedProto !== "http" && (req.socket.encrypted || configuredProtocol === "https:"))
+            ? "https:"
+            : "http:";
         const origin = new URL(`${protocol}//${host}`).origin;
         const spec = await readFile(new URL("./openapi.json", import.meta.url), "utf8");
         res.setHeader("cache-control", "no-store");

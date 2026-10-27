@@ -54,7 +54,7 @@ async function setup(ticketTtlMs, { oidcClient } = {}) {
     database.close();
     await rm(dir, { recursive: true, force: true });
   });
-  return { base, ws: base.replace("http", "ws"), relay, dir, db, database };
+  return { base, ws: base.replace("http", "ws"), relay, dir, db, database, env };
 }
 after(async () => {
   for (const cleanup of fixtures) {
@@ -96,7 +96,7 @@ async function post(base, path, body, auth = admin) {
 }
 
 test("user session routes require Auth bearer and never enumerate rooms", async () => {
-  const { base, ws } = await setup();
+  const { base, ws, env } = await setup();
   assert.equal((await fetch(`${base}/api/v1/sessions`)).status, 401);
   assert.equal(
     (
@@ -112,6 +112,9 @@ test("user session routes require Auth bearer and never enumerate rooms", async 
   const spec = await apiDoc.json();
   assert.equal(spec.servers[0].url, base);
   assert.ok(spec.paths["/api/v1/sessions"]);
+  env.TRUST_PROXY = "true";
+  const proxiedDoc = await fetch(`${base}/api`, { headers: { "x-forwarded-proto": "https" } });
+  assert.equal((await proxiedDoc.json()).servers[0].url, base.replace("http://", "https://"));
   assert.equal((await fetch(`${base}/status`)).status, 404);
   assert.equal((await post(base, "/publish", { sessionId: "anything", data: "x" })).status, 404);
   const generic = connect(`${ws}${socketPath("a".repeat(128))}`);
