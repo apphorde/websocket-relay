@@ -2,7 +2,7 @@
 
 A WebSocket relay for persistent user sessions and registered machine bridges.
 
-The UI uses Li3 reactive state primitives from [`@li3/web`](https://li3.dev), served locally from the pinned package dependency.
+The UI uses Li3 reactive state primitives from [`@li3/web`](https://li3.dev), served locally from the pinned package dependency. Tailwind CSS v4 compiles `tailwind.css` into the committed `public/style.css` with `npm run build`. WebSocket snippets use the component at `https://sodium.static.apphor.de/code-block.html` inside a sandboxed iframe. The iframe has a route-specific CSP for Li3's runtime evaluation and Highlight.js; those permissions are not granted to the authenticated dashboard.
 
 ## Configuration
 

@@ -1,0 +1,15 @@
+@import "tailwindcss";
+@source "./public";
+@source not "./public/style.css";
+
+@theme {
+  --color-canvas: #f7f7f5;
+  --color-ink: #20211f;
+  --color-border: #e7e7e2;
+  --color-divider: #ededeb;
+  --color-muted: #777973;
+  --color-sage: #617862;
+  --color-focus: #a4b7a5;
+  --color-danger: #9b4339;
+  --color-danger-border: #d7b7b3;
+}

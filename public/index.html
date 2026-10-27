@@ -6,35 +6,78 @@
     <meta name="theme-color" content="#f7f7f5" />
     <title>Relay sessions</title>
     <link rel="stylesheet" href="/style.css" />
+    <script type="importmap" nonce="__CSP_NONCE__">
+      { "imports": { "@li3/web": "/vendor/li3-web.js" } }
+    </script>
     <script type="module" src="/app.js"></script>
   </head>
-  <body>
-    <main class="shell">
-      <header class="topbar">
-        <a class="brand" href="/" aria-label="Relay home">relay<span>.</span></a>
-        <button id="sign-out" class="quiet hidden" type="button">Sign out</button>
+  <body class="min-w-[320px] bg-canvas font-sans text-ink antialiased">
+    <main class="mx-auto w-[calc(100%-28px)] max-w-[720px] pt-5 pb-6 sm:w-[calc(100%-40px)] sm:pt-8">
+      <header class="mb-8 flex items-center justify-between gap-4">
+        <a class="text-xl font-bold tracking-[-0.06em] text-ink no-underline" href="/" aria-label="Relay home"
+          >relay<span class="text-sage">.</span></a
+        >
+        <button
+          id="sign-out"
+          class="hidden cursor-pointer border-0 bg-transparent px-2.5 py-2 text-sm text-muted transition hover:text-ink focus-visible:outline-3 focus-visible:outline-focus"
+          type="button"
+        >
+          Sign out
+        </button>
       </header>
-      <section id="signed-out" class="card hidden" aria-labelledby="signin-title">
-        <h2 id="signin-title">Welcome back</h2>
-        <p>Sign in with your AppHorde account to manage sessions.</p>
-        <a id="sign-in" class="button" href="/api/v1/auth/login">Sign in</a>
+      <section
+        id="signed-out"
+        class="hidden rounded-xl border border-border bg-white p-5 shadow-[0_12px_36px_rgb(35_38_31_/_4%)] sm:p-[26px]"
+        aria-labelledby="signin-title"
+      >
+        <h2 id="signin-title" class="mb-1.5 text-[19px] tracking-[-0.025em]">Welcome back</h2>
+        <p class="mb-4 text-sm leading-[1.55] text-muted">Sign in with your AppHorde account to manage sessions.</p>
+        <a
+          id="sign-in"
+          class="inline-flex min-h-[42px] items-center justify-center rounded-[7px] border border-ink bg-ink px-4 text-sm font-semibold text-white no-underline transition hover:bg-[#41473e] focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-focus"
+          href="/api/v1/auth/login"
+          >Sign in</a
+        >
       </section>
-      <section id="sessions-view" class="card hidden" aria-labelledby="sessions-title">
-        <div class="section-head">
+      <section
+        id="sessions-view"
+        class="hidden rounded-xl border border-border bg-white p-5 shadow-[0_12px_36px_rgb(35_38_31_/_4%)] sm:p-[26px]"
+        aria-labelledby="sessions-title"
+      >
+        <div class="flex items-center justify-between gap-[18px]">
           <div>
-            <h2 id="sessions-title">Your sessions</h2>
-            <p class="muted">Create and manage your sessions.</p>
+            <h2 id="sessions-title" class="mb-1.5 text-[19px] tracking-[-0.025em]">Your sessions</h2>
+            <p class="mb-0 text-sm leading-[1.55] text-muted">Create and manage your sessions.</p>
           </div>
         </div>
-        <div class="create-row">
-          <label class="visibility"><input id="public-session" type="checkbox" /> Public</label>
-          <button id="create-session" class="button" type="button">Create session</button>
+        <div
+          class="mt-[22px] flex flex-col items-stretch justify-between gap-4 border-y border-divider py-[15px] sm:flex-row sm:items-center"
+        >
+          <label class="inline-flex items-center gap-[9px] text-[13px] text-[#555852]"
+            ><input
+              id="public-session"
+              class="h-4 w-4 accent-sage focus-visible:outline-3 focus-visible:outline-focus"
+              type="checkbox"
+            />
+            Public</label
+          >
+          <button
+            id="create-session"
+            class="inline-flex min-h-[42px] w-full cursor-pointer items-center justify-center rounded-[7px] border border-ink bg-ink px-4 text-sm font-semibold text-white transition hover:bg-[#41473e] focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+            type="button"
+          >
+            Create session
+          </button>
         </div>
-        <p id="visibility-copy" class="muted">Only connections with a session key can connect.</p>
-        <p id="message" class="message" role="status" aria-live="polite"></p>
-        <ul id="session-list" class="session-list"></ul>
+        <p id="visibility-copy" class="mt-3 mb-0 text-sm leading-[1.55] text-muted">
+          Only connections with a session key can connect.
+        </p>
+        <p id="message" class="mt-2.5 min-h-5 text-[13px] text-danger" role="status" aria-live="polite"></p>
+        <ul id="session-list" class="mt-3 grid list-none gap-2.5 p-0"></ul>
       </section>
-      <footer>Public sessions allow anyone to read and write. Private sessions require a session key.</footer>
+      <footer class="px-0.5 py-[22px] text-xs text-[#858780]">
+        Public sessions allow anyone to read and write. Private sessions require a session key.
+      </footer>
     </main>
   </body>
 </html>

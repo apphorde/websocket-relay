@@ -16,7 +16,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "build": "echo true",
+    "build": "tailwindcss -i tailwind.css -o public/style.css --minify",
     "ci": "npm i",
     "test": "node --test test/*.test.js",
     "test:e2e": "pnpm exec playwright test"
@@ -24,7 +24,9 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.64.1",
+    "@tailwindcss/cli": "^4.3.3",
     "eslint": "^10.13.0",
-    "globals": "^17.13.0"
+    "globals": "^17.13.0",
+    "tailwindcss": "^4.3.3"
   }
 }

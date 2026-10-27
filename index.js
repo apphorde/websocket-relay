@@ -12,6 +12,9 @@ const MAX_HTTP_BODY = 16 * 1024;
 const AUTH_TIMEOUT = 5000;
 const TICKET_TTL = 60_000;
 const SESSION_ID = /^[0-9a-f]{128}$/;
+const CODE_BLOCK_COMPONENT_URL = "https://sodium.static.apphor.de/code-block.html";
+const HIGHLIGHTJS_SCRIPT_URL = "https://unpkg.com/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js";
+const HIGHLIGHTJS_THEME_URL = "https://unpkg.com/@highlightjs/cdn-assets@11.11.1/styles/atom-one-dark.min.css";
 
 function bearerMatches(header, secret) {
   if (!secret || typeof header !== "string") {
@@ -147,6 +150,7 @@ export function createRelay({
   });
   async function handleRequest(req, res) {
     const pathname = new URL(req.url || "/", "http://localhost").pathname;
+    const isSnippetFrame = pathname === "/snippet-frame.html";
     const connectOrigins = [env.OIDC_ISSUER, env.AUTH_API_URL].filter(Boolean).flatMap((value) => {
       try {
         return [new URL(value).origin];
@@ -155,13 +159,17 @@ export function createRelay({
       }
     });
     const connectSources = [...new Set(connectOrigins)].join(" ");
+    const cspNonce = randomBytes(16).toString("base64");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-Frame-Options", isSnippetFrame ? "SAMEORIGIN" : "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Permissions-Policy", "serial=()");
+    // Keep the upstream component's runtime and CDN permissions inside its sandboxed frame only.
     res.setHeader(
       "Content-Security-Policy",
-      `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ${connectSources}; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'`,
+      isSnippetFrame
+        ? `default-src 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}' ${HIGHLIGHTJS_SCRIPT_URL} blob:; style-src 'self' ${HIGHLIGHTJS_THEME_URL}; style-src-attr 'unsafe-inline'; connect-src ${CODE_BLOCK_COMPONENT_URL}; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'; form-action 'none'`
+        : `default-src 'self'; script-src 'self' 'nonce-${cspNonce}'; style-src 'self'; connect-src 'self' ${connectSources}; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'`,
     );
 
     if (env.APP_URL?.startsWith("https://")) {
@@ -196,20 +204,47 @@ export function createRelay({
     }
     if (pathname === "/") {
       try {
-        const html = await readFile(new URL("./public/index.html", import.meta.url));
+        const html = (await readFile(new URL("./public/index.html", import.meta.url), "utf8")).replaceAll(
+          "__CSP_NONCE__",
+          cspNonce,
+        );
         res.setHeader("cache-control", "no-store");
         return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
       } catch {
         return res.writeHead(500).end();
       }
     }
-    if (pathname === "/app.js" || pathname === "/style.css" || pathname === "/vendor/li3-web.js") {
+    if (isSnippetFrame && req.method === "GET") {
+      try {
+        const html = (await readFile(new URL("./public/snippet-frame.html", import.meta.url), "utf8")).replaceAll(
+          "__CSP_NONCE__",
+          cspNonce,
+        );
+        res.setHeader("cache-control", "no-store");
+        return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
+      } catch {
+        return res.writeHead(500).end();
+      }
+    }
+    if (
+      pathname === "/app.js" ||
+      pathname === "/snippet-frame.js" ||
+      pathname === "/style.css" ||
+      pathname === "/vendor/li3-web.js"
+    ) {
       try {
         const isStyle = pathname === "/style.css";
         const ext = isStyle ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
         const assetPath =
           pathname === "/vendor/li3-web.js" ? "./node_modules/@li3/web/index.js" : `./public${pathname}`;
         const asset = await readFile(new URL(assetPath, import.meta.url));
+        if (
+          req.headers.origin === "null" &&
+          ["/snippet-frame.js", "/style.css", "/vendor/li3-web.js"].includes(pathname)
+        ) {
+          res.setHeader("Access-Control-Allow-Origin", "null");
+          res.setHeader("Vary", "Origin");
+        }
         return res.writeHead(200, { "content-type": ext, "cache-control": "no-cache" }).end(asset);
       } catch {
         return res.writeHead(404).end();
