@@ -4,8 +4,8 @@ info:
   version: 1.0.0
   description: >-
     User sessions are persistent and Auth bearer protected. Registered machine
-    sessions and claims are persisted via db.apphor.de and require an
-    owner-scoped one-time ticket.
+    sessions and claims are persisted through the configured database provider
+    and require an owner-scoped one-time ticket.
 servers:
   - url: "__HOSTNAME__"
     description: Deployed relay (HTTPS/WSS)

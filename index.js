@@ -51,7 +51,7 @@ export function createRelay({
     if (oidcConfig) {
       return oidcConfig;
     }
-    if (!env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.APP_URL) {
+    if (!env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.OIDC_ISSUER || !env.APP_URL) {
       throw new Error("OIDC is not configured");
     }
     const appUrl = new URL(env.APP_URL);
@@ -67,6 +67,15 @@ export function createRelay({
       throw new Error("APP_URL must be an HTTPS origin");
     }
     const issuer = new URL(env.OIDC_ISSUER);
+    if (
+      (issuer.protocol !== "https:" && !(issuer.protocol === "http:" && localHost(issuer.hostname))) ||
+      issuer.username ||
+      issuer.password ||
+      issuer.search ||
+      issuer.hash
+    ) {
+      throw new Error("OIDC_ISSUER must be an HTTPS URL without credentials or query parameters");
+    }
     const localIssuer = issuer.protocol === "http:" && localHost(issuer.hostname);
     oidcConfig = await oidcClient.discovery(
       issuer,
@@ -99,7 +108,7 @@ export function createRelay({
   const setCookie = (res, value, maxAge) =>
     res.setHeader(
       "set-cookie",
-      `relay_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${new URL(env.APP_URL || "http://localhost").protocol === "https:" ? "; Secure" : ""}`,
+      `relay_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${env.APP_URL && new URL(env.APP_URL).protocol === "https:" ? "; Secure" : ""}`,
     );
   const browserSession = (req) => {
     const key = cookie(req, "relay_session");
@@ -124,14 +133,21 @@ export function createRelay({
   });
   async function handleRequest(req, res) {
     const pathname = new URL(req.url || "/", "http://localhost").pathname;
-    let authOrigin = new URL(env.OIDC_ISSUER).origin;
+    const connectOrigins = [env.OIDC_ISSUER, env.AUTH_API_URL].filter(Boolean).flatMap((value) => {
+      try {
+        return [new URL(value).origin];
+      } catch {
+        return [];
+      }
+    });
+    const connectSources = [...new Set(connectOrigins)].join(" ");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Permissions-Policy", "serial=()");
     res.setHeader(
       "Content-Security-Policy",
-      `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ${authOrigin}; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'`,
+      `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ${connectSources}; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'`,
     );
 
     if (env.APP_URL?.startsWith("https://")) {
@@ -147,9 +163,10 @@ export function createRelay({
         initialized &&
         Boolean(
           env.DATABASE_URL &&
-            env.DB_AUTH_TOKEN &&
             env.OIDC_CLIENT_ID &&
             env.OIDC_CLIENT_SECRET &&
+            env.OIDC_ISSUER &&
+            env.AUTH_API_URL &&
             env.APP_URL &&
             env.AUTH_TOKEN_AUDIENCE,
         );
@@ -287,13 +304,15 @@ export function createRelay({
       if (!env.AUTH_TOKEN_AUDIENCE) {
         return res.writeHead(503).end();
       }
-      const authApiUrl = env.OIDC_ISSUER;
+      const authApiUrl = env.AUTH_API_URL;
       try {
         const parsedAuthApi = new URL(authApiUrl);
         const localAuth =
           parsedAuthApi.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsedAuthApi.hostname);
         if (
           (parsedAuthApi.protocol !== "https:" && !localAuth) ||
+          parsedAuthApi.username ||
+          parsedAuthApi.password ||
           parsedAuthApi.pathname !== "/" ||
           parsedAuthApi.search ||
           parsedAuthApi.hash

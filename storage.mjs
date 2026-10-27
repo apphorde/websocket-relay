@@ -40,14 +40,31 @@ async function readLegacy(path, validate, label) {
 export async function createStorage({ env = process.env, db: injectedDb } = {}) {
   let db = injectedDb;
   if (!db) {
-    if (!env.DATABASE_URL || !env.DB_AUTH_TOKEN) {
-      throw new Error("DATABASE_URL and DB_AUTH_TOKEN are required");
+    if (!env.DATABASE_URL) {
+      throw new Error("DATABASE_URL is required");
     }
-    if (!/^https:\/\/db\.apphor\.de\/db~[a-f0-9]+\/index\.mjs$/.test(env.DATABASE_URL)) {
-      throw new Error("DATABASE_URL must be a db.apphor.de consumer module URL");
+    let databaseUrl;
+    try {
+      databaseUrl = new URL(env.DATABASE_URL);
+    } catch {
+      throw new Error("DATABASE_URL must be an HTTPS database consumer module URL");
+    }
+    if (
+      databaseUrl.protocol !== "https:" ||
+      !databaseUrl.pathname.endsWith("/index.mjs") ||
+      databaseUrl.username ||
+      databaseUrl.password ||
+      databaseUrl.search ||
+      databaseUrl.hash
+    ) {
+      throw new Error(
+        "DATABASE_URL must be an HTTPS database consumer module URL without credentials or query parameters",
+      );
     }
     db = await import(env.DATABASE_URL);
-    db.configure({ token: env.DB_AUTH_TOKEN });
+    if (env.DB_AUTH_TOKEN) {
+      db.configure({ token: env.DB_AUTH_TOKEN });
+    }
   }
 
   const run = (s, d = []) => db.run(s, d);

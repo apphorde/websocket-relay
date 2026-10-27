@@ -30,6 +30,8 @@ async function setup(ticketTtlMs, { oidcClient } = {}) {
     DATA_PATH: dir,
     BRIDGE_REGISTRATION_TOKEN: token,
     RELAY_API_TOKEN: admin,
+    OIDC_ISSUER: "https://issuer.test",
+    AUTH_API_URL: "https://auth.test",
     ...(oidcClient
       ? { OIDC_CLIENT_ID: "test-client", OIDC_CLIENT_SECRET: "test-secret", AUTH_TOKEN_AUDIENCE: "test-audience" }
       : {}),
@@ -175,7 +177,7 @@ test("OIDC sign-in binds state to a browser cookie and exposes only a short-live
   assert.equal(browserStatus.headers.get("cache-control"), "no-store");
   assert.deepEqual(await browserStatus.json(), { authenticated: true });
   const authConfig = await fetch(`${base}/auth/config`, { headers: { cookie: sessionCookie } });
-  assert.deepEqual(await authConfig.json(), { authApiUrl: "https://auth.api.apphor.de", audience: "test-audience" });
+  assert.deepEqual(await authConfig.json(), { authApiUrl: "https://auth.test", audience: "test-audience" });
 
   const sessions = await fetch(`${base}/api/sessions`, { headers: { authorization: "Bearer auth-user-a" } });
   assert.equal(sessions.status, 200);

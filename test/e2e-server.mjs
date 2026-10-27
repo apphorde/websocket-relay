@@ -3,20 +3,27 @@ import http from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import net from "node:net";
 import { createInMemorySqliteAdapter } from "../storage.mjs";
 import { createRelay } from "../index.js";
 
 const database = new DatabaseSync(":memory:");
 const port = 4174;
-const authPort = 4175;
+const authPort = await new Promise((resolve, reject) => {
+  const reservation = net.createServer();
+  reservation.once("error", reject);
+  reservation.listen(0, "127.0.0.1", () => {
+    const { port: availablePort } = reservation.address();
+    reservation.close((error) => (error ? reject(error) : resolve(availablePort)));
+  });
+});
 const dataPath = await mkdtemp(join(tmpdir(), "relay-e2e-"));
 const env = {
   APP_URL: `http://127.0.0.1:${port}`,
   AUTH_TOKEN_AUDIENCE: "relay-ui-test",
   AUTH_API_URL: `http://127.0.0.1:${authPort}`,
   DATA_PATH: dataPath,
-  DATABASE_URL: "https://db.apphor.de/db~test/index.mjs",
-  DB_AUTH_TOKEN: "test-db-token",
+  DATABASE_URL: "https://database.invalid/db~test/index.mjs",
   OIDC_CLIENT_ID: "relay-test-client",
   OIDC_CLIENT_SECRET: "test-oidc-secret",
   OIDC_ISSUER: `http://127.0.0.1:${authPort}`,
