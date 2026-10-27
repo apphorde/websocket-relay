@@ -4,15 +4,26 @@
   "description": "WebSockets relay",
   "main": "./index.js",
   "type": "module",
-  "keywords": ["websocket"],
+  "keywords": [
+    "websocket"
+  ],
   "author": "Darlan Alves <me@darlanalv.es>",
   "license": "MIT",
   "dependencies": {
+    "openid-client": "^6.8.8",
     "ws": "^8.0.0"
   },
   "scripts": {
     "start": "node index.js",
     "build": "echo true",
-    "ci": "npm i"
+    "ci": "npm i",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "pnpm exec playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0"
   }
 }

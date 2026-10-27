@@ -1,0 +1,253 @@
+openapi: 3.1.0
+info:
+  title: WebSocket Relay API
+  version: 1.0.0
+  description: >-
+    User sessions are persistent and Auth bearer protected. Registered machine
+    sessions and claims are persisted via db.apphor.de and require an
+    owner-scoped one-time ticket.
+servers:
+  - url: "__HOSTNAME__"
+    description: Deployed relay (HTTPS/WSS)
+  - url: http://localhost:3000
+    description: Local development
+paths:
+  /api/sessions:
+    get:
+      operationId: listOwnedSessions
+      summary: List sessions owned by the authenticated Auth subject
+      security: [{ UserBearer: [] }]
+      responses:
+        "200":
+          description: Owned session metadata and current live connection counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserSession"
+        "401": { description: Invalid, expired, or incorrectly-audienced Auth access token }
+    post:
+      operationId: createOwnedSession
+      summary: Create a session using a browser-generated SHA-512 identifier
+      security: [{ UserBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, isPublic]
+              properties:
+                id: { type: string, pattern: "^[0-9a-f]{128}$" }
+                isPublic: { type: boolean }
+      responses:
+        "201": { description: Session created }
+        "400": { description: Invalid ID or machine-reserved ID }
+        "409": { description: ID owned by another user or visibility differs }
+        "401": { description: Invalid Auth bearer }
+  /api/sessions/{sessionId}:
+    delete:
+      operationId: deleteOwnedSession
+      security: [{ UserBearer: [] }]
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{128}$" }
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Not owned or not found }
+  /auth/status:
+    get:
+      operationId: getBrowserSessionStatus
+      summary: Check for an active local OIDC browser session
+      responses:
+        "200": { description: Signed in }
+        "401": { description: No valid browser login }
+  /auth/config:
+    get:
+      summary: Read Auth API token issuance configuration for the signed-in page
+      responses:
+        "200": { description: Auth API URL and expected token audience }
+        "401": { description: No valid browser login }
+        "503": { description: Token audience is not configured }
+  /auth/callback:
+    get:
+      summary: Complete the OIDC authorization-code callback
+      responses:
+        "302": { description: Signed in and redirected to the landing page }
+        "400": { description: Invalid or expired OIDC transaction }
+  /auth/logout:
+    post:
+      summary: End the local relay browser session
+      responses:
+        "303": { description: Signed out and redirected to the landing page }
+        "403": { description: Invalid request origin }
+  /health:
+    get:
+      summary: Readiness status for database and OIDC configuration
+      responses:
+        "200": { description: Ready }
+        "503": { description: Configuration or database unavailable }
+  /auth/login:
+    get:
+      summary: Start server-side OIDC authorization code with PKCE
+      responses:
+        "302": { description: Redirect to configured OIDC issuer }
+        "503": { description: OIDC not configured }
+  /_admin/machines:
+    get:
+      operationId: listMachines
+      summary: List registered machines
+      security: [{ RelayAdminBearer: [] }]
+      responses:
+        "200":
+          description: Registry and online state
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Machine"
+        "401": { description: Missing or invalid admin bearer }
+  /_admin/machines/{machineId}/claim:
+    post:
+      operationId: claimMachine
+      summary: Claim an unclaimed machine (same-owner retries are idempotent)
+      security: [{ RelayAdminBearer: [] }]
+      parameters:
+        - $ref: "#/components/parameters/MachineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ownerSub]
+              properties:
+                ownerSub: { type: string, maxLength: 512 }
+      responses:
+        "200": { description: Claimed or already owned by this subject }
+        "409": { description: Already claimed by another subject }
+        "401": { description: Missing or invalid admin bearer }
+  /_admin/machines/{machineId}/ticket:
+    post:
+      operationId: createMachineTicket
+      summary: Issue a one-use machine control ticket (expires within 60 seconds)
+      security: [{ RelayAdminBearer: [] }]
+      parameters:
+        - $ref: "#/components/parameters/MachineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ownerSub]
+              properties:
+                ownerSub: { type: string, maxLength: 512 }
+      responses:
+        "200":
+          description: One-time ticket; protect it as a credential
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ticket, expiresIn]
+                properties:
+                  ticket: { type: string }
+                  expiresIn: { type: integer, maximum: 60 }
+        "403": { description: Subject does not own machine }
+        "401": { description: Missing or invalid admin bearer }
+  /{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        description: Generic room identifier, or UUID of a registered machine (ticket authorization required).
+        schema:
+          type: string
+    get:
+      operationId: connectWebSocket
+      summary: Connect to a relay session
+      description: >-
+        Generic session IDs must exist and require a verified Auth access token in Authorization or query token. The owner can publish; public sessions allow anonymous/authenticated listeners only. Registered machine UUIDs retain the one-time-ticket protocol. ?text converts binary to hexadecimal text. Query access tokens are credentials and can leak in URL logs.
+      security: [{ UserBearer: [] }]
+      parameters:
+        - name: token
+          in: query
+          required: false
+          description: Auth access token for browser WebSocket clients; omitted only for public listeners.
+          schema: { type: string }
+        - name: text
+          in: query
+          required: false
+          description: Convert binary payloads to lowercase hexadecimal text.
+          schema: { type: boolean }
+      responses:
+        "101":
+          description: WebSocket connection established
+      x-websocket:
+        message:
+          oneOf:
+            - type: string
+              description: Text frame payload, relayed unchanged to non-textOnly peers.
+            - type: string
+              format: binary
+              description: Binary frame payload, relayed unchanged to non-textOnly peers; hexadecimal text for ?text peers.
+        queryParameters:
+          - name: text
+            description: When present, receive text frames only; binary messages arrive as lowercase hexadecimal text.
+  /bridge/register:
+    get:
+      operationId: registerMachineBridge
+      summary: Register an ephemeral machine bridge
+      description: >-
+        WebSocket endpoint. Requires Authorization Bearer BRIDGE_REGISTRATION_TOKEN.
+        Its first frame must be {"type":"register","machineId":"<UUID>"}.
+        Duplicate active bridge registrations are rejected. Successful registration
+        responds with {"type":"registered","machineId":"...","sessionId":"...","claimedBy":null,"online":true}.
+      responses:
+        "101": { description: WebSocket established; registration still required }
+      x-websocket:
+        message:
+          type: object
+          required: [type, machineId]
+          properties:
+            type: { const: register }
+            machineId: { type: string, format: uuid }
+components:
+  securitySchemes:
+    UserBearer:
+      type: http
+      scheme: bearer
+      description: Auth-issued OIDC access token validated using Auth /userinfo.
+    RelayAdminBearer:
+      type: http
+      scheme: bearer
+  parameters:
+    MachineId:
+      name: machineId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    UserSession:
+      type: object
+      required: [id, isPublic, createdAt, connectedClients]
+      properties:
+        id: { type: string, pattern: "^[0-9a-f]{128}$" }
+        isPublic: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        connectedClients: { type: integer, minimum: 0 }
+    Machine:
+      type: object
+      required: [machineId, sessionId, claimedBy, online, registeredAt, claimedAt]
+      properties:
+        machineId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        claimedBy: { type: [string, "null"] }
+        online: { type: boolean }
+        registeredAt: { type: string, format: date-time }
+        claimedAt: { type: [string, "null"], format: date-time }

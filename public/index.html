@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f7f5" />
+    <title>Relay sessions</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Relay home">relay<span>.</span></a>
+        <button id="sign-out" class="quiet hidden" type="button">Sign out</button>
+      </header>
+      <section class="intro">
+        <p class="eyebrow">WEBSOCKET RELAY</p>
+        <h1>Sessions, simply.</h1>
+        <p class="subhead">Create a private connection or share a public, listen-only session.</p>
+      </section>
+      <section id="signed-out" class="card hidden" aria-labelledby="signin-title">
+        <h2 id="signin-title">Welcome back</h2>
+        <p>Sign in with your AppHorde account to manage sessions.</p>
+        <a id="sign-in" class="button" href="/auth/login">Sign in</a>
+      </section>
+      <section id="sessions-view" class="card hidden" aria-labelledby="sessions-title">
+        <div class="section-head">
+          <div>
+            <h2 id="sessions-title">Your sessions</h2>
+            <p class="muted">Connection counts update automatically.</p>
+          </div>
+        </div>
+        <div class="create-row">
+          <label class="visibility"><input id="public-session" type="checkbox" /> Public · listeners only</label>
+          <button id="create-session" class="button" type="button">Create session</button>
+        </div>
+        <p id="message" class="message" role="status" aria-live="polite"></p>
+        <ul id="session-list" class="session-list"></ul>
+      </section>
+      <footer>Session IDs are SHA-512 digests. Keep them private unless you choose to share.</footer>
+    </main>
+  </body>
+</html>
