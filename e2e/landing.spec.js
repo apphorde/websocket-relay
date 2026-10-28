@@ -48,7 +48,9 @@ test("signs in, manages private/public sessions, and stays responsive on mobile 
   const privateCode = privateFrameLocator.locator("code-block code");
   await expect(privateCode).toContainText('type: "authorize"');
   await expect(privateCode).not.toContainText(await sessionKey.inputValue());
-  await expect(page.getByText("Scroll horizontally to view the full snippet.").first()).toBeVisible();
+  await expect(privateFrameLocator.locator("code-block")).toHaveAttribute("aria-label", "WebSocket snippet.");
+  await expect(page.getByText("Scroll horizontally to view the full snippet.", { exact: true })).toHaveCount(0);
+  await expect.poll(() => privateCode.evaluate((code) => code.scrollWidth <= code.clientWidth)).toBe(true);
 
   await page.getByLabel("Public").check();
   await expect(page.locator("#public-session")).toBeChecked();
@@ -61,6 +63,9 @@ test("signs in, manages private/public sessions, and stays responsive on mobile 
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
   await page.setViewportSize({ width: 320, height: 844 });
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 320);
+  expect(await page.locator("main").evaluate((element) => element.clientWidth)).toBe(320);
+  await expect.poll(() => privateCode.evaluate((code) => code.scrollWidth <= code.clientWidth)).toBe(true);
+  await expect.poll(() => publicCode.evaluate((code) => code.scrollWidth <= code.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(consoleErrors).toEqual([]);
 
@@ -73,6 +78,7 @@ test("signs in, manages private/public sessions, and stays responsive on mobile 
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(page.getByRole("heading", { name: "Your sessions" })).toBeVisible();
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 1440);
+  expect(await page.locator("main").evaluate((element) => element.clientWidth)).toBe(1120);
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
 });

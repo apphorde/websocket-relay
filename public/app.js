@@ -14,6 +14,22 @@ const messageState = ref("");
 const sessionsState = ref([]);
 const publicState = ref(false);
 let renderedSessionSnapshot;
+const snippetFrames = new Map();
+
+window.addEventListener("message", (event) => {
+  const message = event.data;
+  const frame = snippetFrames.get(message?.channel);
+  if (
+    !frame ||
+    event.source !== frame.contentWindow ||
+    message.type !== "snippet-height" ||
+    !Number.isFinite(message.height)
+  ) {
+    return;
+  }
+
+  frame.height = Math.max(56, Math.min(400, Math.ceil(message.height)));
+});
 
 effect(
   () => messageState.value,
@@ -29,6 +45,7 @@ effect(
       return;
     }
     renderedSessionSnapshot = snapshot;
+    snippetFrames.clear();
     list.replaceChildren(...sessions.map(addSession));
     if (sessions.length === 0) {
       const empty = document.createElement("li");
@@ -126,17 +143,16 @@ function addSession(session) {
     byte.toString(16).padStart(2, "0"),
   ).join("");
   snippet.title = "WebSocket snippet";
-  snippet.className = `mt-3 block w-full min-w-0 rounded-lg border-0 bg-ink ${session.isPublic ? "h-[56px]" : "h-[76px]"}`;
+  snippet.className = "mt-3 block w-full min-w-0 rounded-lg border-0 bg-ink";
+  snippet.height = session.isPublic ? 56 : 76;
   snippet.setAttribute("sandbox", "allow-scripts");
   snippet.referrerPolicy = "no-referrer";
+  snippetFrames.set(channel, snippet);
   snippet.src = `/snippet-frame.html?channel=${channel}`;
   snippet.addEventListener("load", () => {
     snippet.contentWindow?.postMessage({ type: "websocket-snippet", channel, source }, "*");
   });
-  const snippetHint = document.createElement("p");
-  snippetHint.className = "mt-1 text-xs text-muted";
-  snippetHint.textContent = "Scroll horizontally to view the full snippet.";
-  details.append(snippet, snippetHint);
+  details.append(snippet);
 
   const keyArea = document.createElement("div");
   keyArea.className = "mt-3 grid max-w-full gap-2 text-[13px]";
